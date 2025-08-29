@@ -1,6 +1,7 @@
 # unitree_sdk2_python
 Python interface for unitree sdk2
 
+test
 # Installation
 ## Dependencies
 - Python >= 3.8
