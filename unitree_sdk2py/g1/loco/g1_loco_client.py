@@ -77,17 +77,24 @@ class LocoClient(Client):
         code, data = self._Call(ROBOT_API_ID_LOCO_SET_ARM_TASK, parameter)
         return code
     
-    # 8001
+    # 7001
     # 获得FSM（有限状态机）ID
     def GetFsmId(self):
         code, data = self._Call(ROBOT_API_ID_LOCO_GET_FSM_ID, "")
         if code == 0:
             return data
         return None
-    # 8002
+    # 7002
     # 获得FSM（有限状态机）模式
     def GetFsmMode(self):
         code, data = self._Call(ROBOT_API_ID_LOCO_GET_FSM_MODE, "")
+        if code == 0:
+            return data
+        return None
+    # 7003
+    # 获得平衡模式
+    def GetBalanceMode(self):
+        code, data = self._Call(ROBOT_API_ID_LOCO_GET_BALANCE_MODE, "")
         if code == 0:
             return data
         return None
