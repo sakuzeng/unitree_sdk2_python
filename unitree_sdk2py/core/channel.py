@@ -146,7 +146,7 @@ class Channel:
                 print("[Writer] catch DDSException error. msg:", e.msg)
                 return False
             except Exception as e:
-                print("[Writer] write sample error. msg:", e.args())
+                print("[Writer] write sample error. msg:", e.args)
                 return False
 
             return True
