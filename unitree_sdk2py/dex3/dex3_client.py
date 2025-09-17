@@ -1,8 +1,8 @@
 """
 Dex3 灵巧手控制客户端
 
-该模块提供了对宇树 Dex3-1 力控灵巧手的完整控制接口，基于官方DDS协议规范。
-- 7 自由度关节控制（3指 + 拇指旋转）
+该模块提供了对宇树 Dex3-1 力控灵巧手的控制接口，基于官方DDS协议规范。
+- 7 自由度关节控制（3指 + 拇指旋转）；9个传感器，每个传感器是3*4的点阵数据
 - 触觉传感器数据读取  
 - 左右手支持
 - 多种控制模式（位置、速度、扭矩）
@@ -18,6 +18,8 @@ import socket
 import sys
 from typing import Optional, List, Tuple, Dict, Any
 from dataclasses import dataclass
+import matplotlib.pyplot as plt
+import numpy as np
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
 
@@ -30,6 +32,7 @@ class Dex3Config:
     joint_limits_right: List[Tuple[float, float]] = None
     
     # 控制增益默认值
+    default_kp_1: float = 0.5
     default_kp: float = 1.5
     default_kd: float = 0.1
     
@@ -157,6 +160,29 @@ class Dex3Client:
         with self._state_lock:
             self._latest_state = msg
 
+    def read_state(self, timeout: float = 1.0) -> Optional[Any]:
+        """
+        读取灵巧手状态 - 基于官方HandState_结构
+        
+        Args:
+            timeout: 超时时间(秒)
+        
+        Returns:
+            HandState_ 消息或 None
+        """
+        start_time = time.time()
+        
+        # 先等待一段时间让数据稳定
+        time.sleep(0.1)
+        
+        while time.time() - start_time < timeout:
+            with self._state_lock:
+                if self._latest_state is not None:
+                    return self._latest_state
+            time.sleep(0.01)  # 减少CPU占用
+        
+        return None
+    
     def _get_joint_limits(self) -> List[Tuple[float, float]]:
         """获取当前手的关节限位"""
         if self.hand == "left":
@@ -198,7 +224,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=1,  # Enable
+                    mode=self._pack_mode(i),  # Enable
                     q=0.0,
                     dq=0.0,
                     tau=0.0,
@@ -249,29 +275,6 @@ class Dex3Client:
             traceback.print_exc()
             return False
     
-    def read_state(self, timeout: float = 1.0) -> Optional[Any]:
-        """
-        读取灵巧手状态 - 基于官方HandState_结构
-        
-        Args:
-            timeout: 超时时间(秒)
-        
-        Returns:
-            HandState_ 消息或 None
-        """
-        start_time = time.time()
-        
-        # 先等待一段时间让数据稳定
-        time.sleep(0.1)
-        
-        while time.time() - start_time < timeout:
-            with self._state_lock:
-                if self._latest_state is not None:
-                    return self._latest_state
-            time.sleep(0.01)  # 减少CPU占用
-        
-        return None
-    
     def set_joint_angles(
         self, 
         angles: List[float], 
@@ -286,12 +289,12 @@ class Dex3Client:
             print(f"[Dex3] 错误: 需要{self.MOTOR_MAX}个关节角度，得到{len(angles)}个")
             return False
         
-        kp = kp if kp is not None else self.config.default_kp
+        kp = kp if kp is not None else self.config.default_kp_1
         kd = kd if kd is not None else self.config.default_kd
         velocities = velocities or [0.0] * self.MOTOR_MAX
         torques = torques or [0.0] * self.MOTOR_MAX
         
-        # 限位检查
+        # 限位检查  
         limits = self._get_joint_limits()
         clamped_angles = []
         for i, (angle, (min_val, max_val)) in enumerate(zip(angles, limits)):
@@ -309,7 +312,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=mode,
+                    mode=self._pack_mode(i),
                     q=float(clamped_angles[i]),
                     dq=float(velocities[i]),
                     tau=float(torques[i]),
@@ -385,7 +388,7 @@ class Dex3Client:
             try:
                 pressure_data = {}
                 for i, sensor in enumerate(state.press_sensor_state):
-                    # 基于官方PressSensorState_结构 - 12个压力值和温度值
+                    # 基于官方PressSensorState_结构 - 每个传感器有12个压力值和温度值
                     pressure_data[f'sensor_{i}'] = {
                         'pressure': list(sensor.pressure),      # 12个压力值
                         'temperature': list(sensor.temperature) # 12个温度值
@@ -394,6 +397,83 @@ class Dex3Client:
             except Exception as e:
                 print(f"[Dex3] 解析压力数据失败: {e}")
         return None
+    
+    def visualize_sensor_data(
+        self,
+        timeout: float = 1.0,
+        save_path: Optional[str] = None,
+        show: bool = True,
+        interval: float = 0.5,  # 刷新间隔(秒)
+        duration: Optional[float] = None  # 总持续时间(秒)，None表示无限
+    ) -> bool:
+        """
+        实时可视化显示所有9个传感器的压力数据 - 生成3x3热图网格
+        
+        Args:
+            timeout: 读取状态的超时时间(秒)
+            save_path: 保存图像路径，None表示不保存
+            show: 是否显示图像
+            interval: 刷新间隔(秒)
+            duration: 总持续时间(秒)，None表示无限
+        
+        Returns:
+            bool: 可视化是否成功
+        """
+        start_time = time.time()
+        pressure_data = self.get_pressure_data(timeout)
+        if not pressure_data:
+            print("[Dex3] 未获取到压力数据，无法可视化")
+            return False
+        # 创建3x3子图网格
+        plt.ion()  # 启用交互模式
+        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+        axes = axes.flatten()  # 将2D数组展平为1D，便于索引
+        
+        # 初始化图像
+        images = []  # 存储imshow对象以便更新
+        for i in range(9):
+            sensor_key = f'sensor_{i}'
+            if sensor_key in pressure_data:
+                pressures = np.array(pressure_data[sensor_key]['pressure']).reshape(3, 4)
+                im = axes[i].imshow(pressures, cmap='hot', aspect='equal', animated=True)
+                images.append(im)
+                axes[i].set_title(f'传感器 {i} 压力热图')
+                axes[i].set_xlabel('列 (Column)')
+                axes[i].set_ylabel('行 (Row)')
+                plt.colorbar(im, ax=axes[i], label='压力值')
+            else:
+                axes[i].text(0.5, 0.5, f'无数据\n(sensor_{i})', 
+                             ha='center', va='center', transform=axes[i].transAxes)
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"[Dex3] 初始图像已保存到 {save_path}")
+        
+        if show:
+            plt.tight_layout()
+            while duration is None or (time.time() - start_time) < duration:
+                pressure_data = self.get_pressure_data(timeout)
+                if not pressure_data:
+                    print("[Dex3] 未能更新压力数据")
+                    break
+                
+                for i in range(9):
+                    sensor_key = f'sensor_{i}'
+                    if sensor_key in pressure_data and len(images) > i:
+                        pressures = np.array(pressure_data[sensor_key]['pressure']).reshape(3, 4)
+                        images[i].set_array(pressures)
+                
+                plt.draw()
+                plt.pause(interval)  # 控制刷新间隔
+                
+                # 可选：检查退出条件（如按键）
+                if plt.waitforbuttonpress(timeout=0.1):  # 检测键盘输入
+                    break
+            
+            plt.ioff()  # 关闭交互模式
+            plt.show(block=False)  # 非阻塞显示
+        
+        return True
     
     def get_imu_data(self, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
         """
@@ -443,7 +523,7 @@ class Dex3Client:
                 print(f"[Dex3] 解析电源信息失败: {e}")
         return None
     
-    def get_fingertip_pressures(self, timeout: float = 1.0) -> Optional[List[float]]:
+    # def get_fingertip_pressures(self, timeout: float = 1.0) -> Optional[List[float]]:
         """获取指尖压力值（GUI 中用于自适应抓取）"""
         pressure_data = self.get_pressure_data(timeout)
         if pressure_data:
@@ -469,7 +549,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=0,  # Disable
+                    mode=self._pack_mode(i),  # Disable
                     q=0.0,
                     dq=0.0,
                     tau=0.0,
@@ -503,7 +583,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=1,  # Enable
+                    mode=self._pack_mode(i),  # Enable
                     q=0.0,
                     dq=0.0,
                     tau=0.0,
@@ -548,12 +628,12 @@ class Dex3Client:
                 q = mid + amplitude * math.sin(self._rotate_count / 20000.0 * math.pi)
                 
                 motor_cmd = MotorCmd_(
-                    mode=1,  # Enable
+                    mode=self._pack_mode(i),  # Enable
                     q=float(q),
                     dq=0.0,
                     tau=0.0,
-                    kp=0.5,
-                    kd=0.1,
+                    kp=self.config.default_kp_1,
+                    kd=self.config.default_kd,
                     reserve=0  # 单个uint32
                 )
                 motor_cmds.append(motor_cmd)
@@ -596,12 +676,12 @@ class Dex3Client:
                 mid = (limits[i][1] + limits[i][0]) / 2.0
                 
                 motor_cmd = MotorCmd_(
-                    mode=1,  # Enable
+                    mode=self._pack_mode(i),  # Enable
                     q=float(mid),
                     dq=0.0,
                     tau=0.0,
                     kp=float(grip_strength),
-                    kd=0.1,
+                    kd=self.config.default_kd,
                     reserve=0  # 单个uint32
                 )
                 motor_cmds.append(motor_cmd)
@@ -618,78 +698,6 @@ class Dex3Client:
             
         except Exception as e:
             print(f"[Dex3] 抓握失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-    def get_motor_data(self, timeout: float = 1.0) -> Optional[List[Dict[str, Any]]]:
-        """
-        获取所有电机的状态数据，包括角度、速度和扭矩。
-
-        Args:
-            timeout (float): 超时时间，单位秒。
-
-        Returns:
-            Optional[List[Dict[str, Any]]]: 每个电机的状态数据列表，包含 'q', 'dq', 'tau'。
-        """
-        state = self.read_state(timeout)
-        if state and hasattr(state, 'motor_state') and len(state.motor_state) >= self.MOTOR_MAX:
-            try:
-                motor_data = []
-                for motor in state.motor_state[:self.MOTOR_MAX]:
-                    motor_data.append({
-                        'q': float(motor.q),        # 关节角度
-                        'dq': float(motor.dq),      # 关节速度
-                        'tau': float(motor.tau_est) # 关节扭矩（使用反馈扭矩）
-                    })
-                return motor_data
-            except Exception as e:
-                print(f"[Dex3] 获取电机数据失败: {e}")
-        return None
-
-    def set_motor_data(self, motor_data: List[Dict[str, Any]], kp: Optional[float] = None, kd: Optional[float] = None) -> bool:
-        """设置电机的目标数据 - 修复HandCmd_.reserve为4个元素"""
-        if len(motor_data) != self.MOTOR_MAX:
-            print(f"[Dex3] 错误: 需要{self.MOTOR_MAX}个电机数据，得到{len(motor_data)}个")
-            return False
-
-        kp = kp if kp is not None else self.config.default_kp
-        kd = kd if kd is not None else self.config.default_kd
-
-        try:
-            from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, MotorCmd_
-
-            # 创建电机命令列表
-            motor_cmds = []
-            for i, data in enumerate(motor_data):
-                motor_cmd = MotorCmd_(
-                    mode=1,  # Enable
-                    q=float(data.get('q', 0.0)),
-                    dq=float(data.get('dq', 0.0)),
-                    tau=float(data.get('tau', 0.0)),
-                    kp=float(kp),
-                    kd=float(kd),
-                    reserve=0  # 单个uint32
-                )
-                motor_cmds.append(motor_cmd)
-
-            # 创建 HandCmd_ 消息
-            hand_cmd = HandCmd_(
-                motor_cmd=motor_cmds,
-                reserve=[0, 0, 0, 0]  # 4个元素的数组
-            )
-
-            # 发布命令
-            success = self._publish(hand_cmd)
-            if success:
-                print(f"[Dex3] {self.hand}手电机数据设置成功")
-            else:
-                print(f"[Dex3] {self.hand}手电机数据设置失败")
-
-            return success
-
-        except Exception as e:
-            print(f"[Dex3] 设置电机数据失败: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -724,7 +732,6 @@ class Dex3Client:
                 normalized_angles.append(normalized)
             
             # 清屏并打印 - 与C++版本一致
-            print("\033[2J\033[H")
             print("-- Hand State --")
             print("--- Current State: Test ---")
             print("Commands:")
@@ -735,7 +742,7 @@ class Dex3Client:
             print("  s - Stop")
             
             if is_left_hand:
-                print(f" L: {normalized_angles}")
+                print(f" L: {normalized_angles}")                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
             else:
                 print(f" R: {normalized_angles}")
             
@@ -810,59 +817,7 @@ class Dex3Gestures:
             angles[0] = -angles[0]  # 拇指旋转镜像
         
         return angles
-
-
-# 手部姿势序列控制器
-class Dex3SequenceController:
-    """手部姿势序列控制器"""
     
-    def __init__(self, dex3_client: Dex3Client):
-        self.client = dex3_client
-        self.pose_sequence: List[List[float]] = []
-        self.sequence_index: int = 0
-        self.step_size: float = 0.1
-        
-    def set_pose_sequence(self, poses: List[List[float]]):
-        """设置姿势序列"""
-        self.pose_sequence = poses
-        self.sequence_index = 0
-    
-    def step_to_next_pose(self, current_angles: List[float]) -> Tuple[List[float], bool]:
-        """
-        向下一个姿势步进
-        
-        Returns:
-            (目标角度, 是否完成序列)
-        """
-        if self.sequence_index >= len(self.pose_sequence):
-            return current_angles, True
-        
-        target = self.pose_sequence[self.sequence_index]
-        next_angles = []
-        all_reached = True
-        
-        for i, (current, target_val) in enumerate(zip(current_angles, target)):
-            diff = target_val - current
-            if abs(diff) <= self.step_size:
-                next_angles.append(target_val)
-            else:
-                step = self.step_size if diff > 0 else -self.step_size
-                next_angles.append(current + step)
-                all_reached = False
-        
-        if all_reached:
-            self.sequence_index += 1
-        
-        return next_angles, self.sequence_index >= len(self.pose_sequence)
-
-
-# 添加到 Dex3Client 类的方法
-def create_sequence_controller(self) -> 'Dex3SequenceController':
-    """创建序列控制器"""
-    return Dex3SequenceController(self)
-
-
-# 资源管理
 @contextlib.contextmanager
 def dex3_connection(hand="right", interface="eth0"):
     """Dex3 连接上下文管理器"""
@@ -874,43 +829,6 @@ def dex3_connection(hand="right", interface="eth0"):
         if dex3:
             dex3.stop_motors()  # 安全停止
             print("Dex3 连接已安全关闭")
-
-
-# 配置文件处理
-def load_config(config_path: str = "config/dex3_config.json") -> Dex3Config:
-    """加载 Dex3 配置文件"""
-    from pathlib import Path
-    
-    config_file = Path(config_path)
-    if not config_file.exists():
-        print(f"配置文件不存在: {config_path}，使用默认配置")
-        return Dex3Config()
-    
-    with open(config_file, 'r', encoding='utf-8') as f:
-        config_dict = json.load(f)
-    
-    return Dex3Config(**config_dict)
-
-
-def save_config(config: Dex3Config, config_path: str = "config/dex3_config.json"):
-    """保存 Dex3 配置文件"""
-    from pathlib import Path
-    
-    config_file = Path(config_path)
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    config_dict = {
-        'joint_limits_left': config.joint_limits_left,
-        'joint_limits_right': config.joint_limits_right,
-        'default_kp': config.default_kp,
-        'default_kd': config.default_kd,
-        'max_torque': config.max_torque,
-        'timeout_enable': config.timeout_enable
-    }
-    
-    with open(config_file, 'w', encoding='utf-8') as f:
-        json.dump(config_dict, f, indent='\t', ensure_ascii=False)
-
 
 # 使用示例和测试函数
 def test_dex3_basic_control():
@@ -945,7 +863,7 @@ def test_dex3_basic_control():
         
         # 手势测试
         print("\n执行手势序列...")
-        gestures_to_test = ["open", "closed", "pinch", "point", "rest"]
+        gestures_to_test = ["open", "closed", "pinch", "point", "rest", "peace", "ok"]
         
         for gesture_name in gestures_to_test:
             print(f"执行手势: {gesture_name}")
@@ -961,7 +879,7 @@ def test_dex3_basic_control():
             print(f"力压传感器数据已获取: {len(pressure_data)} 个传感器")
         else:
             print("未获取到压力传感器数据")
-        
+        success = dex3.visualize_sensor_data(interval=0.2, duration=100.0)  # 10秒实时显示
         # IMU数据测试
         print("\n读取IMU数据...")
         imu_data = dex3.get_imu_data()
