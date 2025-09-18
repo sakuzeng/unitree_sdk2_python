@@ -224,7 +224,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=self._pack_mode(i),  # Enable
+                    mode=1,  # Enable
                     q=0.0,
                     dq=0.0,
                     tau=0.0,
@@ -312,7 +312,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=self._pack_mode(i),
+                    mode=1,
                     q=float(clamped_angles[i]),
                     dq=float(velocities[i]),
                     tau=float(torques[i]),
@@ -549,7 +549,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=self._pack_mode(i),  # Disable
+                    mode=0,  # Disable
                     q=0.0,
                     dq=0.0,
                     tau=0.0,
@@ -583,7 +583,7 @@ class Dex3Client:
             motor_cmds = []
             for i in range(self.MOTOR_MAX):
                 motor_cmd = MotorCmd_(
-                    mode=self._pack_mode(i),  # Enable
+                    mode=1,  # Enable
                     q=0.0,
                     dq=0.0,
                     tau=0.0,
@@ -628,7 +628,7 @@ class Dex3Client:
                 q = mid + amplitude * math.sin(self._rotate_count / 20000.0 * math.pi)
                 
                 motor_cmd = MotorCmd_(
-                    mode=self._pack_mode(i),  # Enable
+                    mode=1,  # Enable
                     q=float(q),
                     dq=0.0,
                     tau=0.0,
@@ -676,7 +676,7 @@ class Dex3Client:
                 mid = (limits[i][1] + limits[i][0]) / 2.0
                 
                 motor_cmd = MotorCmd_(
-                    mode=self._pack_mode(i),  # Enable
+                    mode=1,  # Enable
                     q=float(mid),
                     dq=0.0,
                     tau=0.0,

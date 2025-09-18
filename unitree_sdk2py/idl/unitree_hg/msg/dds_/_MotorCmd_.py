@@ -25,7 +25,7 @@ class MotorCmd_(idl.IdlStruct, typename="unitree_hg.msg.dds_.MotorCmd_"):
     mode: types.uint8
     q: types.float32
     dq: types.float32
-    tau: types.float32
+    tau: types.float32                              
     kp: types.float32
     kd: types.float32
     reserve: types.uint32
