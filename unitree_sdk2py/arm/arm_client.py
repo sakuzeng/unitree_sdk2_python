@@ -200,6 +200,8 @@ class G1ArmClient:
         
         # 预定义位置 - 与C++例程一致
         self._init_pos = [0.0] * self.ARM_JOINT_COUNT
+        # 自然下垂位置
+        self._nature_pos = [0.243, 0.173, -0.016, 0.796, 0.090, 0.027, -0.008, 0.250, -0.175, 0.025, 0.801, -0.111, 0.035, 0.009]
         # 获得双臂水平张开的电机数据
         self._target_pos = self._get_target_positions()
         
@@ -338,7 +340,7 @@ class G1ArmClient:
                     tau=0.0,
                     kp=0.0,
                     kd=0.0,
-                    reserve=[0, 0, 0]
+                    reserve=0
                 )
                 motor_cmds.append(motor_cmd)
             
@@ -441,15 +443,15 @@ class G1ArmClient:
         
     def initialize_arms(self, timeout: float = 5.0) -> bool:
         """
-        初始化手臂到零位 - 完全模仿C++例程的权重过渡逻辑
+        初始化手臂到自然位置 - 完全模仿C++例程的权重过渡逻辑
 
-        这个版本使用与C++例程完全相同的初始化算法：
-        1. 逐渐增加权重从0到1
-        2. 同时进行位置插值
+        使用与C++例程相同的初始化算法：
+        1. 逐步增加权重从0到1
+        2. 同时进行位置插值到自然位置
         3. 权重使用weight*weight的平方关系
         """
         print("[G1Arm] 按回车键开始初始化手臂...")
-        input()
+        input("按回车键继续...")
 
         # 获取当前关节位置
         current_positions = self.get_current_joint_positions()
@@ -457,40 +459,51 @@ class G1ArmClient:
             print("[G1Arm] 无法读取当前关节位置")
             print("[G1Arm] 请检查机器人连接和网络配置")
             return False
-
         print(f"[G1Arm] 当前关节位置: {[f'{pos:.3f}' for pos in current_positions]}")
 
-        # 权重过渡初始化 - 与C++例程完全一致
+        # 权重过渡初始化
         print("[G1Arm] 初始化手臂中...")
-        init_time = 5.0  # 与C++例程一致
+        init_time = 5.0
         time_steps = int(init_time / self.config.control_dt)
+        self._weight = 0.0  # 重置权重
 
-        # 重置权重
-        weight = 0.0
-
+        start_time = time.time()
         for i in range(time_steps):
-            # 增加权重 - 与C++例程完全一致
-            weight += self._delta_weight
-            weight = self._clamp(weight, 0.0, 1.0)
-            print(f"Weight: {weight:.3f}")
+            # 逐步增加权重
+            self._weight += self._delta_weight
+            self._weight = self._clamp(self._weight, 0.0, 1.0)
+            print(f"Weight: {self._weight:.3f}")
 
             # 计算过渡位置 - 线性插值
-            phase = float(i) / time_steps
-            transition_positions = []
-            for j in range(self.ARM_JOINT_COUNT):
-                pos = self._init_pos[j] * phase + current_positions[j] * (1 - phase)
-                transition_positions.append(pos)
+            phase = 1.0 if i == time_steps - 1 else float(i) / time_steps
+            transition_positions = [
+                self._nature_pos[j] * phase + current_positions[j] * (1 - phase)
+                for j in range(self.ARM_JOINT_COUNT)
+            ]
 
-            # 创建并发送命令 - 注意：权重使用weight*weight的平方关系（与C++例程一致）
-            cmd = self._create_arm_command(transition_positions, weight=weight * weight)
+            # 创建并发送命令
+            cmd = self._create_arm_command(transition_positions, weight=self._weight * self._weight)
             if not self._publish_command(cmd):
                 return False
 
+            # 精确延时
+            expected_time = start_time + i * self._sleep_duration
+            if time.time() < expected_time:
+                time.sleep(expected_time - time.time())
+
+        # 检查权重是否为1，如果不满足，继续逐步增加
+        while self._weight < 1.0:
+            self._weight += self._delta_weight
+            self._weight = self._clamp(self._weight, 0.0, 1.0)
+            
+            # 使用自然位置创建命令
+            cmd = self._create_arm_command(self._nature_pos, weight=self._weight * self._weight)
+            if not self._publish_command(cmd):
+                return False
+            
             # 延时
             time.sleep(self._sleep_duration)
-
-        # 更新内部权重状态
-        self._weight = 1.0
+            print(f"额外增加权重: {self._weight:.3f}")
 
         print("[G1Arm] 手臂初始化完成")
         return True
@@ -505,24 +518,33 @@ class G1ArmClient:
         3. 放下双臂（5秒）
         """
         print("[G1Arm] 按回车键开始手臂控制...")
-        input()
+        input("按回车键继续...")
         
         print("[G1Arm] 开始手臂控制!")
-        
+
+        print("张开双臂")
+        input("按回车键继续...")
         # 张开双臂 - 使用C++风格的平滑过渡
+        current_positions = self.get_current_joint_positions()
+        if current_positions is None:
+            print("[G1Arm] 无法读取当前关节位置")
+            print("[G1Arm] 请检查机器人连接和网络配置")
+            return False
+        print(f"[G1Arm] 当前关节位置: {[f'{pos:.3f}' for pos in current_positions]}")
         success = self.smooth_transition(
-            self._init_pos, 
+            current_positions, 
             self._target_pos, 
             5.0,  # 与C++例程一致的时间
             "张开双臂"
         )
         if not success:
             return False
-        
+        print("放下双臂")
+        input("按回车键继续...")
         # 放下双臂 - 使用C++风格的平滑过渡
         success = self.smooth_transition(
             self._target_pos, 
-            self._init_pos, 
+            current_positions, 
             5.0,  # 与C++例程一致的时间
             "放下双臂"
         )
@@ -531,32 +553,64 @@ class G1ArmClient:
     
     def stop_control(self) -> bool:
         """
-        停止控制 - 完全模仿C++例程的退出逻辑
-        
-        使用与C++例程完全相同的权重递减算法
+        停止控制 - 完全模仿C++例程的退出逻辑，并插值到自然位置
+
+        使用与C++例程相同的权重递减算法，从当前位置平滑到自然位置。
         """
         print("[G1Arm] 停止手臂控制中...")
-        
-        stop_time = 2.0  # 与C++例程一致
+        input("按回车键继续...")
+
+        # 获取当前关节位置
+        current_positions = self.get_current_joint_positions()
+        if current_positions is None:
+            print("[G1Arm] 无法读取当前关节位置")
+            print("[G1Arm] 请检查机器人连接和网络配置")
+            return False
+        print(f"[G1Arm] 当前关节位置: {[f'{pos:.3f}' for pos in current_positions]}")
+
+        # 设置停止时间和步数
+        stop_time = 2.0
         time_steps = int(stop_time / self.config.control_dt)
-        
+
+        start_time = time.time()
         for i in range(time_steps):
-            # 减小权重 - 与C++例程完全一致
+            # 逐步减小权重
+            self._weight -= self._delta_weight
+            self._weight = self._clamp(self._weight, 0.0, 1.0)
+            print(f"Weight: {self._weight:.3f}")
+
+            # 计算过渡位置 - 线性插值
+            phase = 1.0 if i == time_steps - 1 else float(i) / time_steps
+            transition_positions = [
+                self._nature_pos[j] * phase + current_positions[j] * (1 - phase)
+                for j in range(self.ARM_JOINT_COUNT)
+            ]
+
+            # 创建并发送命令
+            cmd = self._create_arm_command(transition_positions, weight=self._weight * self._weight)
+            if not self._publish_command(cmd):
+                return False
+
+            # 精确延时
+            expected_time = start_time + i * self._sleep_duration
+            if time.time() < expected_time:
+                time.sleep(expected_time - time.time())
+
+        # 检查权重是否为0，如果不满足，继续逐步减少
+        while self._weight > 0.0:
+            # 继续减小权重
             self._weight -= self._delta_weight
             self._weight = self._clamp(self._weight, 0.0, 1.0)
             
-            # 创建并发送命令
-            cmd = self._create_arm_command(self._init_pos, weight=self._weight)
+            # 使用自然位置创建命令
+            cmd = self._create_arm_command(self._nature_pos, weight=self._weight * self._weight)
             if not self._publish_command(cmd):
                 return False
             
             # 延时
             time.sleep(self._sleep_duration)
-        
-        # 最终设置权重为0 - 确保电机进入自由状态
-        cmd = self._create_arm_command(self._init_pos, weight=0.0)
-        self._publish_command(cmd)
-        
+            print(f"额外减少权重: {self._weight:.3f}")
+
         print("[G1Arm] 手臂控制已停止")
         return True
     
@@ -582,9 +636,9 @@ class G1ArmClient:
                 return False
             
             # 3. 退出控制 - 对应C++例程的stop control
-            if not self.stop_control():
-                print("[G1Arm] 停止控制失败")
-                return False
+            # if not self.stop_control():
+            #     print("[G1Arm] 停止控制失败")
+            #     return False
             
             print("[G1Arm] 基础序列执行完成")
             return True
@@ -594,19 +648,6 @@ class G1ArmClient:
             import traceback
             traceback.print_exc()
             return False
-    
-    def get_current_joint_positions(self, timeout: float = 2.0) -> Optional[List[float]]:
-        """获取当前手臂关节位置"""
-        state = self.read_state(timeout)
-        if state and hasattr(state, 'motor_state') and len(state.motor_state) >= 35:
-            try:
-                positions = []
-                for joint_idx in self._arm_joints:
-                    positions.append(float(state.motor_state[joint_idx].q))
-                return positions
-            except Exception as e:
-                print(f"[G1Arm] 解析关节位置失败: {e}")
-        return None
     
     def set_arm_pose(self, pose_name: str) -> bool:
         """设置手臂到预定义姿态"""
@@ -619,7 +660,7 @@ class G1ArmClient:
             return False
         
         # 设置权重为1.0以确保控制生效
-        self._weight = 1.0
+        # self._weight = 1.0
         
         return self.smooth_transition(
             current_positions,
@@ -631,7 +672,7 @@ class G1ArmClient:
     def set_joint_positions(
         self,
         positions: List[float],
-        duration: float = 3.0,
+        duration: float = 6.0,
         kp: Optional[float] = None,
         kd: Optional[float] = None
     ) -> bool:
@@ -742,6 +783,7 @@ class G1ArmGestures:
         # 基础手臂姿态 (14 DOF) - 基于URDF限位优化
         arm_poses = {
             "rest": [0.0] * 14,  # 零位
+            "nature": [0.243, 0.173, -0.016, 0.796, 0.090, 0.027, -0.008, 0.250, -0.175, 0.025, 0.801, -0.111, 0.035, 0.009],
             "open_arms": [
                 # Left arm - 水平张开
                 0.0, kPi_2, 0.0, kPi_2, 0.0, 0.0, 0.0,
@@ -817,11 +859,11 @@ def test_g1_arm_basic_control():
         time.sleep(3.0)
         
         # 执行基础序列 - 使用C++风格的完整流程
-        arm.execute_basic_sequence_c_style()
+        arm.execute_basic_sequence()
         
         # 测试预定义姿态
         print("\n测试预定义姿态...")
-        poses_to_test = ["rest", "open_arms", "forward_reach", "defensive", "greeting"]
+        poses_to_test = ["rest", "nature", "open_arms", "rest", "forward_reach", "rest", "defensive", "rest", "greeting"]
         
         for pose_name in poses_to_test:
             print(f"设置姿态: {pose_name}")
@@ -888,9 +930,9 @@ def main():
                         break
                     elif cmd == '1':
                         print("执行基础序列（C++风格）...")
-                        arm.execute_basic_sequence_c_style()
+                        arm.execute_basic_sequence()
                     elif cmd == '2':
-                        print("可用姿态: rest, open_arms, forward_reach, defensive, greeting")
+                        print("可用姿态: rest, nature, open_arms, forward_reach, defensive, greeting")
                         pose = input("请输入姿态名称: ").strip()
                         arm.set_arm_pose(pose)
                     elif cmd == '3':
