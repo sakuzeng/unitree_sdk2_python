@@ -294,19 +294,6 @@ class G1ArmClient:
         
         return None
     
-    def get_current_joint_positions(self, timeout: float = 2.0) -> Optional[List[float]]:
-        """获取当前手臂关节位置"""
-        state = self.read_state(timeout)
-        if state and hasattr(state, 'motor_state') and len(state.motor_state) >= 35:
-            try:
-                positions = []
-                for joint_idx in self._arm_joints:
-                    positions.append(float(state.motor_state[joint_idx].q))
-                return positions
-            except Exception as e:
-                print(f"[G1Arm] 解析关节位置失败: {e}")
-        return None
-    
     def _create_arm_command(
         self,
         positions: List[float],
@@ -716,7 +703,20 @@ class G1ArmClient:
             duration,
             "设置关节位置"
         )
-    
+     
+    def get_current_joint_positions(self, timeout: float = 2.0) -> Optional[List[float]]:
+        """获取当前手臂关节位置"""
+        state = self.read_state(timeout)
+        if state and hasattr(state, 'motor_state') and len(state.motor_state) >= 35:
+            try:
+                positions = []
+                for joint_idx in self._arm_joints:
+                    positions.append(float(state.motor_state[joint_idx].q))
+                return positions
+            except Exception as e:
+                print(f"[G1Arm] 解析关节位置失败: {e}")
+        return None
+
     def get_joint_states(self, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
         """
         获取详细的关节状态信息
@@ -783,36 +783,15 @@ class G1ArmGestures:
         # 基础手臂姿态 (14 DOF) - 基于URDF限位优化
         arm_poses = {
             "rest": [0.0] * 14,  # 零位
-            "nature": [0.243, 0.173, -0.016, 0.796, 0.090, 0.027, -0.008, 0.250, -0.175, 0.025, 0.801, -0.111, 0.035, 0.009],
+            "nature": [
+                0.243, 0.173, -0.016, 0.796, 0.090, 0.027, -0.008, 
+                0.250, -0.175, 0.025, 0.801, -0.111, 0.035, 0.009
+            ],
             "open_arms": [
                 # Left arm - 水平张开
                 0.0, kPi_2, 0.0, kPi_2, 0.0, 0.0, 0.0,
                 # Right arm - 水平张开（考虑roll关节限位）
                 0.0, -kPi_2, 0.0, kPi_2, 0.0, 0.0, 0.0,
-            ],
-            "forward_reach": [
-                # Left arm - 向前伸展（安全角度）
-                kPi_2, 0.3, 0.0, 0.5, 0.0, 0.0, 0.0,
-                # Right arm - 向前伸展
-                kPi_2, -0.3, 0.0, 0.5, 0.0, 0.0, 0.0,
-            ],
-            "up_reach": [
-                # Left arm - 向上伸展（安全角度）
-                -kPi_6, 0.5, 0.0, 0.3, 0.0, 0.0, 0.0,
-                # Right arm - 向上伸展
-                -kPi_6, -0.5, 0.0, 0.3, 0.0, 0.0, 0.0,
-            ],
-            "defensive": [
-                # Left arm - 防守姿态（安全角度）
-                -kPi_4, kPi_4, 0.0, kPi_2, 0.0, 0.0, 0.0,
-                # Right arm - 防守姿态
-                -kPi_4, -kPi_4, 0.0, kPi_2, 0.0, 0.0, 0.0,
-            ],
-            "greeting": [
-                # Left arm - 打招呼姿态
-                0.0, 0.8, 0.0, 1.2, 0.0, 0.0, 0.0,
-                # Right arm - 保持自然
-                0.0, -0.3, 0.0, 0.3, 0.0, 0.0, 0.0,
             ],
         }
         
@@ -863,16 +842,15 @@ def test_g1_arm_basic_control():
         
         # 测试预定义姿态
         print("\n测试预定义姿态...")
-        poses_to_test = ["rest", "nature", "open_arms", "rest", "forward_reach", "rest", "defensive", "rest", "greeting"]
+        poses_to_test = ["rest", "nature", "open_arms", "nature"]
         
         for pose_name in poses_to_test:
             print(f"设置姿态: {pose_name}")
             arm.set_arm_pose(pose_name)
             time.sleep(2.0)
         
-        # 返回零位
-        arm.set_arm_pose("rest")
-        
+        # 停止控制
+        arm.stop_control()
         print("\n测试完成!")
         
     except Exception as e:
@@ -932,7 +910,7 @@ def main():
                         print("执行基础序列（C++风格）...")
                         arm.execute_basic_sequence()
                     elif cmd == '2':
-                        print("可用姿态: rest, nature, open_arms, forward_reach, defensive, greeting")
+                        print("可用姿态: rest, nature, open_arms")
                         pose = input("请输入姿态名称: ").strip()
                         arm.set_arm_pose(pose)
                     elif cmd == '3':
