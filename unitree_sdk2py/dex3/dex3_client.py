@@ -23,6 +23,9 @@ from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import numpy as np
 
+import tkinter as tk
+from tkinter import ttk
+
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
 
 
@@ -597,7 +600,7 @@ class Dex3Client:
     
     def get_pressure_data(self, timeout: float = 1.0, print_raw: bool = True) -> Optional[Dict[str, Any]]:
         """
-        获取触觉传感器数据 - 基于官方PressSensorState_结构，支持打印原始数据
+        获取触觉传感器数据 - 基于官方PressSensorState_结构，依据指定索引打印和返回数据
         
         Args:
             timeout: 超时时间(秒)
@@ -610,28 +613,49 @@ class Dex3Client:
         if state and hasattr(state, 'press_sensor_state'):
             try:
                 pressure_data = {}
+                # 定义指定索引规则
+                useful_indices = {
+                    'sensor_1': [3, 6, 8],
+                    'sensor_3': [3, 6, 8],
+                    'sensor_5': [3, 6, 8],
+                    'sensor_0': [0, 2, 9, 11],
+                    'sensor_2': [0, 2, 9, 11],
+                    'sensor_4': [0, 2, 9, 11],
+                    'sensor_6': [0, 2, 9, 11],
+                    'sensor_7': [0, 2, 9, 11],
+                    'sensor_8': [0, 2, 9, 11]
+                }
+
                 for i, sensor in enumerate(state.press_sensor_state):
-                    # 基于官方PressSensorState_结构 - 12个压力值和温度值
+                    sensor_key = f'sensor_{i}'
                     pressure = list(sensor.pressure)
                     temperature = list(sensor.temperature)
-                    
-                    pressure_data[f'sensor_{i}'] = {
-                        'pressure': pressure,      # 12个原始压力值
-                        'temperature': temperature # 12个原始温度值
+
+                    # 根据指定索引过滤数据
+                    filtered_pressure = [p if i in useful_indices.get(sensor_key, []) else "N/A" for i, p in enumerate(pressure)]
+                    filtered_temperature = [t if i in useful_indices.get(sensor_key, []) else "N/A" for i, t in enumerate(temperature)]
+
+                    pressure_data[sensor_key] = {
+                        'pressure': filtered_pressure,      # 过滤后的压力值
+                        'temperature': filtered_temperature # 过滤后的温度值
                     }
-                    
-                    # 如果 print_raw 为 True，打印原始数据
+
+                    # 如果 print_raw 为 True，打印数据
                     if print_raw:
-                        print(f"[Dex3] 传感器 {i} 原始数据:")
-                        print("  压力值: ", [f"{p:.2f}" if p != 30000 else "N/A" for p in pressure])
-                        print("  温度值: ", [f"{t:.2f}" for t in temperature])
+                        print(f"[Dex3] {sensor_key} 原始数据:")
+                        print("  压力值: ", [f"{p:.2f}" if isinstance(p, (int, float)) and p != 30000 else p for p in filtered_pressure])
+                        print("  温度值: ", [f"{t:.2f}" if isinstance(t, (int, float)) else t for t in filtered_temperature])
+                        print(f"  指定索引: {useful_indices.get(sensor_key, [])}")
                         print("-" * 50)
-                
+
+                if not pressure_data:
+                    print("[Dex3] 警告: 未获取到任何传感器数据")
+                    return None
                 return pressure_data
             except Exception as e:
                 print(f"[Dex3] 解析压力数据失败: {e}")
         return None
-    
+
     def visualize_sensor_data(
         self,
         timeout: float = 1.0,
@@ -639,98 +663,97 @@ class Dex3Client:
         show: bool = True,
         interval: float = 0.5,  # 刷新间隔(秒)
         duration: Optional[float] = None,  # 总持续时间(秒)，None表示无限
-        show_values: bool = True  # 是否在热图上显示原始数值
+        show_values: bool = True  # 是否显示实时更新数值
     ) -> bool:
         """
-        实时可视化显示所有9个传感器的压力数据 - 生成3x3热图网格，支持显示原始数值
+        借助 HUD 实时更新并显示所有9个传感器的压力数据 - 每行显示一个传感器，仅显示指定索引的数据
         
         Args:
             timeout: 读取状态的超时时间(秒)
-            save_path: 保存图像路径，None表示不保存
-            show: 是否显示图像
+            save_path: 保存数据路径，None表示不保存
+            show: 是否显示数据
             interval: 刷新间隔(秒)
             duration: 总持续时间(秒)，None表示无限
-            show_values: 是否在热图单元格上显示原始数值
+            show_values: 是否显示实时更新数值
         
         Returns:
-            bool: 可视化是否成功
+            bool: 更新是否成功
         """
         start_time = time.time()
         pressure_data = self.get_pressure_data(timeout)
         if not pressure_data:
-            print("[Dex3] 未获取到压力数据，无法可视化")
+            print("[Dex3] 未获取到有效压力数据，无法更新")
             return False
 
-        # 创建3x3子图网格
-        plt.ion()  # 启用交互模式
-        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
-        axes = axes.flatten()  # 将2D数组展平为1D，便于索引
-        
-        # 初始化图像
-        images = []  # 存储imshow对象以便更新
-        texts = [[] for _ in range(9)]  # 存储文本对象以便更新数值
-        for i in range(9):
-            sensor_key = f'sensor_{i}'
-            if sensor_key in pressure_data:
-                pressures = np.array(pressure_data[sensor_key]['pressure'])
-                # 处理无效值: 30000 设为 np.nan
-                pressures = np.where(pressures == 30000, np.nan, pressures)
-                pressures = pressures.reshape(3, 4)
-                im = axes[i].imshow(pressures, cmap='hot', aspect='equal', animated=True)
-                images.append(im)
-                axes[i].set_title(f'传感器 {i} 压力热图')
-                axes[i].set_xlabel('列 (Column)')
-                axes[i].set_ylabel('行 (Row)')
-                plt.colorbar(im, ax=axes[i], label='压力值')
-                
-                # 如果 show_values 为 True，在单元格上显示原始数值
-                if show_values:
-                    for row in range(3):
-                        for col in range(4):
-                            value = pressures[row, col]
-                            text = axes[i].text(col, row, f'{value:.2f}' if not np.isnan(value) else 'N/A',
-                                                ha="center", va="center", color="black", fontsize=8)
-                            texts[i].append(text)
-            else:
-                axes[i].text(0.5, 0.5, f'无数据\n(sensor_{i})', ha='center', va='center', transform=axes[i].transAxes)
-        
+        # 定义指定索引规则
+        useful_indices = {
+            'sensor_1': [3, 6, 8],
+            'sensor_3': [3, 6, 8],
+            'sensor_5': [3, 6, 8],
+            'sensor_0': [0, 2, 9, 11],
+            'sensor_2': [0, 2, 9, 11],
+            'sensor_4': [0, 2, 9, 11],
+            'sensor_6': [0, 2, 9, 11],
+            'sensor_7': [0, 2, 9, 11],
+            'sensor_8': [0, 2, 9, 11]
+        }
+
+        # 初始化 HUD 窗口（使用 tkinter 模拟）
+        root = tk.Tk()
+        root.title("HUD - 传感器数据")
+        root.geometry("400x300")
+
+        # 创建标签数组，存储每个传感器的显示
+        labels = {}
+        for sensor_key in pressure_data.keys():
+            frame = ttk.Frame(root)
+            frame.pack(fill=tk.X, padx=5, pady=2)
+            label = ttk.Label(frame, text="", font=("Arial", 10))
+            label.pack(side=tk.LEFT)
+            labels[sensor_key] = label
+
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"[Dex3] 初始图像已保存到 {save_path}")
-        
+            with open(save_path, 'w') as f:
+                f.write("时间,传感器,索引,压力值\n")
+
+        def update_hud():
+            nonlocal pressure_data
+            pressure_data = self.get_pressure_data(timeout)
+            if not pressure_data:
+                print("[Dex3] 未能更新有效压力数据")
+                return False
+
+            current_time = time.strftime("%H:%M:%S", time.localtime())
+            for sensor_key in sorted(pressure_data.keys()):  # 排序以保证一致性
+                idx = useful_indices[sensor_key]
+                pressures = [pressure_data[sensor_key]['pressure'][j] for j in idx if isinstance(pressure_data[sensor_key]['pressure'][j], (int, float)) and pressure_data[sensor_key]['pressure'][j] != 30000]
+                if show_values and pressures:
+                    display_str = f"{current_time} - {sensor_key}: "
+                    for j, value in enumerate(pressures):
+                        display_str += f"Idx {idx[j]}: {value:.2f}"
+                        if j < len(pressures) - 1:
+                            display_str += ", "
+                    labels[sensor_key].config(text=display_str)
+
+            if save_path:
+                with open(save_path, 'a') as f:
+                    for sensor_key in pressure_data.keys():
+                        idx = useful_indices[sensor_key]
+                        pressures = [pressure_data[sensor_key]['pressure'][j] for j in idx if isinstance(pressure_data[sensor_key]['pressure'][j], (int, float)) and pressure_data[sensor_key]['pressure'][j] != 30000]
+                        for j, value in enumerate(pressures):
+                            f.write(f"{current_time},{sensor_key},{idx[j]},{value}\n")
+
+            if duration is not None and (time.time() - start_time) >= duration:
+                root.quit()
+            else:
+                root.after(int(interval * 1000), update_hud)  # 定时更新
+
         if show:
-            plt.tight_layout()
-            while duration is None or (time.time() - start_time) < duration:
-                pressure_data = self.get_pressure_data(timeout)
-                if not pressure_data:
-                    print("[Dex3] 未能更新压力数据")
-                    break
-                
-                for i in range(9):
-                    sensor_key = f'sensor_{i}'
-                    if sensor_key in pressure_data and len(images) > i:
-                        pressures = np.array(pressure_data[sensor_key]['pressure'])
-                        pressures = np.where(pressures == 30000, np.nan, pressures)
-                        pressures = pressures.reshape(3, 4)
-                        images[i].set_array(pressures)
-                        
-                        # 更新单元格数值
-                        if show_values:
-                            for j, text in enumerate(texts[i]):
-                                row, col = divmod(j, 4)
-                                value = pressures[row, col]
-                                text.set_text(f'{value:.2f}' if not np.isnan(value) else 'N/A')
-                
-                plt.draw()
-                plt.pause(interval)
-                
-                # 检查退出条件
-                if plt.waitforbuttonpress(timeout=0.1):
-                    break
-            
-            plt.ioff()
-            plt.show(block=False)
-        
+            print("[Dex3] 借助 HUD 实时传感器数据更新开始 (关闭窗口退出)")
+            update_hud()
+            root.mainloop()
+            print("[Dex3] 借助 HUD 实时更新结束")
+
         return True
     
     def get_current_joint_positions(self, timeout: float = 2.0) -> Optional[List[float]]:
