@@ -8,6 +8,7 @@ Dex3 灵巧手控制客户端
 - 多种控制模式（位置、速度、扭矩）
 - 完整的初始化和控制序列
 """
+# bug:右手中指会出现失灵
 
 import time
 import threading
@@ -90,7 +91,7 @@ class Dex3Client:
         # 创建右手控制器
         dex3 = Dex3Client(hand="right", interface="eth0")
         
-        # 执行完整的控制序列
+        # 执行完整的基础控制序列
         dex3.execute_basic_sequence()
         
         # 设置手势
@@ -137,23 +138,14 @@ class Dex3Client:
         
         # 预定义位置 - 基于实际弧度值
         self._init_pos = [0.0] * self.MOTOR_MAX
-        self._nature_pos = self._get_nature_position()
-        
+        self._nature_pos = [-0.029, -1.019, -1.667, 1.551, 1.702, 1.568, 1.710] if hand == "right" else [-0.028, 1.010, 1.511, -1.582, -1.779, -1.647, -1.827]     
+        self._open_pos = [-0.029, 0.587, 0.052, -0.053, -0.034, -0.022, -0.016] if hand == "right" else [0.005, -0.616, -0.085, -0.019, -0.035, -0.018, -0.025]
         # 旋转电机状态变量 - 模拟C++静态变量
         self._rotate_count = 1
         self._rotate_dir = 1
         
         # 初始化DDS连接
         self._init_dds_connection()
-    # 一会儿print
-    def _get_nature_position(self) -> List[float]:
-        """获取自然位置 - 基于手部类型的安全休息位置"""
-        if self.hand == "left":
-            # 左手自然位置 - 轻微弯曲的安全姿态
-            return [0.2, -0.3, 0.5, -0.5, -0.8, -0.5, -0.8]
-        else:
-            # 右手自然位置 - 轻微弯曲的安全姿态  
-            return [0.2, 0.3, -0.5, 0.5, 0.8, 0.5, 0.8]
     
     def _init_dds_connection(self):
         """初始化DDS连接 - 基于官方规范"""
@@ -164,7 +156,7 @@ class Dex3Client:
             if self._interface:
                 ChannelFactoryInitialize(0, self._interface)
                 print(f"[Dex3] 初始化DDS连接 - 接口: {self._interface}")
-                print(f"[Dex3] 提示: 请确保网络接口配置正确")
+                # print(f"[Dex3] 提示: 请确保网络接口配置正确")
             
             # 创建发布者和订阅者
             self._cmd_publisher = ChannelPublisher(self._cmd_topic, HandCmd_)
@@ -396,71 +388,6 @@ class Dex3Client:
         print("[Dex3] 灵巧手初始化完成")
         return True
     
-    # def set_joint_angles(
-    #     self, 
-    #     angles: List[float], 
-    #     kp: Optional[float] = None, 
-    #     kd: Optional[float] = None,
-    #     velocities: Optional[List[float]] = None,
-    #     torques: Optional[List[float]] = None,
-    #     check_limits: bool = True
-    # ) -> bool:
-    #     """
-    #     设置关节角度 - 移除归一化，直接使用弧度值
-        
-    #     Args:
-    #         angles: 关节角度列表（弧度）
-    #         kp: 位置增益
-    #         kd: 速度增益
-    #         velocities: 速度列表
-    #         torques: 扭矩列表
-    #         check_limits: 是否检查关节限位
-    #     """
-    #     if len(angles) != self.MOTOR_MAX:
-    #         print(f"[Dex3] 错误: 需要{self.MOTOR_MAX}个关节角度，得到{len(angles)}个")
-    #         return False
-        
-    #     kp = kp if kp is not None else self.config.default_kp
-    #     kd = kd if kd is not None else self.config.default_kd
-    #     velocities = velocities or [0.0] * self.MOTOR_MAX
-    #     torques = torques or [0.0] * self.MOTOR_MAX
-        
-    #     # 限位检查 - 直接使用弧度值
-    #     final_angles = angles.copy()
-    #     if check_limits:
-    #         limits = self._get_joint_limits()
-    #         for i, (angle, (min_val, max_val)) in enumerate(zip(angles, limits)):
-    #             if angle < min_val or angle > max_val:
-    #                 print(f"[Dex3] 警告: 关节{i}角度{angle:.3f}rad超出限位[{min_val:.3f}, {max_val:.3f}]rad")
-    #                 final_angles[i] = self._clamp(angle, min_val, max_val)
-        
-    #     try:
-    #         # 创建并发送命令
-    #         cmd = self._create_hand_command(
-    #             final_angles, 
-    #             velocities, 
-    #             torques, 
-    #             kp, 
-    #             kd
-    #         )
-            
-    #         success = self._publish_command(cmd)
-    #         if success:
-    #             print(f"[Dex3] {self.hand}手关节角度设置成功")
-    #             print(f"[Dex3] 角度: {[f'{a:.3f}' for a in final_angles]} rad")
-    #         else:
-    #             print(f"[Dex3] {self.hand}手关节角度设置失败")
-            
-    #         return success
-        
-    #     except Exception as e:
-    #         print(f"[Dex3] 设置关节角度失败: {e}")
-    #         import traceback
-    #         traceback.print_exc()
-    #         return False
-    
-
-    
     def execute_hand_control_sequence(self) -> bool:
         """
         执行手部控制序列 - 借鉴arm_client的控制流程
@@ -475,7 +402,7 @@ class Dex3Client:
         print("[Dex3] 开始手部控制!")
 
         # 手势序列
-        gestures_to_test = ["open", "closed", "pinch", "point", "peace", "ok", "rest"]
+        gestures_to_test = ["nature", "open"]
         
         for gesture_name in gestures_to_test:
             print(f"执行手势: {gesture_name}")
@@ -488,7 +415,7 @@ class Dex3Client:
                     success = self.smooth_transition(
                         current_positions, 
                         angles, 
-                        2.0,  # 每个手势2秒过渡时间
+                        3.0,  # 每个手势2秒过渡时间
                         f"执行手势: {gesture_name}"
                     )
                     if not success:
@@ -503,7 +430,14 @@ class Dex3Client:
     
     def stop_control(self) -> bool:
         """
-        停止控制 - 借鉴arm_client的退出逻辑，平滑到自然位置
+        停止控制并禁用电机 - 合并arm_client的退出逻辑和平滑过渡到自然位置
+        
+        流程：
+        1. 平滑过渡到自然位置
+        2. 禁用所有电机
+        
+        Returns:
+            bool: 停止是否成功
         """
         print("[Dex3] 停止手部控制中...")
         input("按回车键继续...")
@@ -521,9 +455,48 @@ class Dex3Client:
             5.0,
             "停止控制，返回自然位置"
         )
+        if not success:
+            print("[Dex3] 平滑过渡失败")
+            return False
+
+        try:
+            from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, MotorCmd_
+            
+            # 创建7个电机命令以禁用电机
+            motor_cmds = []
+            for i in range(self.MOTOR_MAX):
+                motor_cmd = MotorCmd_(
+                    mode=0,  # Disable
+                    q=0.0,
+                    dq=0.0,
+                    tau=0.0,
+                    kp=0.0,
+                    kd=0.0,
+                    reserve=0  # 单个uint32
+                )
+                motor_cmds.append(motor_cmd)
+            
+            hand_cmd = HandCmd_(
+                motor_cmd=motor_cmds,
+                reserve=[0, 0, 0, 0]  # 4个元素的数组
+            )
+            
+            # 发布禁用命令
+            success = self._publish_command(hand_cmd)
+            if success:
+                print(f"[Dex3] {self.hand}手电机已停止")
+            else:
+                print(f"[Dex3] 禁用电机失败")
+            return success
+            
+        except Exception as e:
+            print(f"[Dex3] 停止电机失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
         print("[Dex3] 手部控制已停止")
-        return success
+        return True
     
     def execute_basic_sequence(self) -> bool:
         """
@@ -622,6 +595,144 @@ class Dex3Client:
             "设置关节位置"
         )
     
+    def get_pressure_data(self, timeout: float = 1.0, print_raw: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        获取触觉传感器数据 - 基于官方PressSensorState_结构，支持打印原始数据
+        
+        Args:
+            timeout: 超时时间(秒)
+            print_raw: 是否打印原始数据
+        
+        Returns:
+            Dict: 触觉传感器数据字典
+        """
+        state = self.read_state(timeout)
+        if state and hasattr(state, 'press_sensor_state'):
+            try:
+                pressure_data = {}
+                for i, sensor in enumerate(state.press_sensor_state):
+                    # 基于官方PressSensorState_结构 - 12个压力值和温度值
+                    pressure = list(sensor.pressure)
+                    temperature = list(sensor.temperature)
+                    
+                    pressure_data[f'sensor_{i}'] = {
+                        'pressure': pressure,      # 12个原始压力值
+                        'temperature': temperature # 12个原始温度值
+                    }
+                    
+                    # 如果 print_raw 为 True，打印原始数据
+                    if print_raw:
+                        print(f"[Dex3] 传感器 {i} 原始数据:")
+                        print("  压力值: ", [f"{p:.2f}" if p != 30000 else "N/A" for p in pressure])
+                        print("  温度值: ", [f"{t:.2f}" for t in temperature])
+                        print("-" * 50)
+                
+                return pressure_data
+            except Exception as e:
+                print(f"[Dex3] 解析压力数据失败: {e}")
+        return None
+    
+    def visualize_sensor_data(
+        self,
+        timeout: float = 1.0,
+        save_path: Optional[str] = None,
+        show: bool = True,
+        interval: float = 0.5,  # 刷新间隔(秒)
+        duration: Optional[float] = None,  # 总持续时间(秒)，None表示无限
+        show_values: bool = True  # 是否在热图上显示原始数值
+    ) -> bool:
+        """
+        实时可视化显示所有9个传感器的压力数据 - 生成3x3热图网格，支持显示原始数值
+        
+        Args:
+            timeout: 读取状态的超时时间(秒)
+            save_path: 保存图像路径，None表示不保存
+            show: 是否显示图像
+            interval: 刷新间隔(秒)
+            duration: 总持续时间(秒)，None表示无限
+            show_values: 是否在热图单元格上显示原始数值
+        
+        Returns:
+            bool: 可视化是否成功
+        """
+        start_time = time.time()
+        pressure_data = self.get_pressure_data(timeout)
+        if not pressure_data:
+            print("[Dex3] 未获取到压力数据，无法可视化")
+            return False
+
+        # 创建3x3子图网格
+        plt.ion()  # 启用交互模式
+        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+        axes = axes.flatten()  # 将2D数组展平为1D，便于索引
+        
+        # 初始化图像
+        images = []  # 存储imshow对象以便更新
+        texts = [[] for _ in range(9)]  # 存储文本对象以便更新数值
+        for i in range(9):
+            sensor_key = f'sensor_{i}'
+            if sensor_key in pressure_data:
+                pressures = np.array(pressure_data[sensor_key]['pressure'])
+                # 处理无效值: 30000 设为 np.nan
+                pressures = np.where(pressures == 30000, np.nan, pressures)
+                pressures = pressures.reshape(3, 4)
+                im = axes[i].imshow(pressures, cmap='hot', aspect='equal', animated=True)
+                images.append(im)
+                axes[i].set_title(f'传感器 {i} 压力热图')
+                axes[i].set_xlabel('列 (Column)')
+                axes[i].set_ylabel('行 (Row)')
+                plt.colorbar(im, ax=axes[i], label='压力值')
+                
+                # 如果 show_values 为 True，在单元格上显示原始数值
+                if show_values:
+                    for row in range(3):
+                        for col in range(4):
+                            value = pressures[row, col]
+                            text = axes[i].text(col, row, f'{value:.2f}' if not np.isnan(value) else 'N/A',
+                                                ha="center", va="center", color="black", fontsize=8)
+                            texts[i].append(text)
+            else:
+                axes[i].text(0.5, 0.5, f'无数据\n(sensor_{i})', ha='center', va='center', transform=axes[i].transAxes)
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"[Dex3] 初始图像已保存到 {save_path}")
+        
+        if show:
+            plt.tight_layout()
+            while duration is None or (time.time() - start_time) < duration:
+                pressure_data = self.get_pressure_data(timeout)
+                if not pressure_data:
+                    print("[Dex3] 未能更新压力数据")
+                    break
+                
+                for i in range(9):
+                    sensor_key = f'sensor_{i}'
+                    if sensor_key in pressure_data and len(images) > i:
+                        pressures = np.array(pressure_data[sensor_key]['pressure'])
+                        pressures = np.where(pressures == 30000, np.nan, pressures)
+                        pressures = pressures.reshape(3, 4)
+                        images[i].set_array(pressures)
+                        
+                        # 更新单元格数值
+                        if show_values:
+                            for j, text in enumerate(texts[i]):
+                                row, col = divmod(j, 4)
+                                value = pressures[row, col]
+                                text.set_text(f'{value:.2f}' if not np.isnan(value) else 'N/A')
+                
+                plt.draw()
+                plt.pause(interval)
+                
+                # 检查退出条件
+                if plt.waitforbuttonpress(timeout=0.1):
+                    break
+            
+            plt.ioff()
+            plt.show(block=False)
+        
+        return True
+    
     def get_current_joint_positions(self, timeout: float = 2.0) -> Optional[List[float]]:
         """获取当前关节位置 - 借鉴arm_client的状态读取逻辑"""
         state = self.read_state(timeout)
@@ -718,190 +829,41 @@ class Dex3Client:
         else:
             print("[Dex3] 无法获取关节状态")
 
-    def get_pressure_data(self, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
-        """
-        获取触觉传感器数据 - 基于官方PressSensorState_结构
-        
-        Args:
-            timeout: 超时时间(秒)
-        
-        Returns:
-            Dict: 触觉传感器数据字典
-        """
-        state = self.read_state(timeout)
-        if state and hasattr(state, 'press_sensor_state'):
-            try:
-                pressure_data = {}
-                for i, sensor in enumerate(state.press_sensor_state):
-                    # 基于官方PressSensorState_结构 - 每个传感器有12个压力值和温度值
-                    pressure_data[f'sensor_{i}'] = {
-                        'pressure': list(sensor.pressure),      # 12个压力值
-                        'temperature': list(sensor.temperature) # 12个温度值
-                    }
-                return pressure_data
-            except Exception as e:
-                print(f"[Dex3] 解析压力数据失败: {e}")
-        return None
-    
-    def visualize_sensor_data(
-        self,
-        timeout: float = 1.0,
-        save_path: Optional[str] = None,
-        show: bool = True,
-        interval: float = 0.5,  # 刷新间隔(秒)
-        duration: Optional[float] = None  # 总持续时间(秒)，None表示无限
-    ) -> bool:
-        """
-        实时可视化显示所有9个传感器的压力数据 - 生成3x3热图网格
-        
-        Args:
-            timeout: 读取状态的超时时间(秒)
-            save_path: 保存图像路径，None表示不保存
-            show: 是否显示图像
-            interval: 刷新间隔(秒)
-            duration: 总持续时间(秒)，None表示无限
-        
-        Returns:
-            bool: 可视化是否成功
-        """
-        start_time = time.time()
-        pressure_data = self.get_pressure_data(timeout)
-        if not pressure_data:
-            print("[Dex3] 未获取到压力数据，无法可视化")
-            return False
-        # 创建3x3子图网格
-        plt.ion()  # 启用交互模式
-        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
-        axes = axes.flatten()  # 将2D数组展平为1D，便于索引
-        
-        # 初始化图像
-        images = []  # 存储imshow对象以便更新
-        for i in range(9):
-            sensor_key = f'sensor_{i}'
-            if sensor_key in pressure_data:
-                pressures = np.array(pressure_data[sensor_key]['pressure']).reshape(3, 4)
-                im = axes[i].imshow(pressures, cmap='hot', aspect='equal', animated=True)
-                images.append(im)
-                axes[i].set_title(f'传感器 {i} 压力热图')
-                axes[i].set_xlabel('列 (Column)')
-                axes[i].set_ylabel('行 (Row)')
-                plt.colorbar(im, ax=axes[i], label='压力值')
-            else:
-                axes[i].text(0.5, 0.5, f'无数据\n(sensor_{i})', 
-                             ha='center', va='center', transform=axes[i].transAxes)
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"[Dex3] 初始图像已保存到 {save_path}")
-        
-        if show:
-            plt.tight_layout()
-            while duration is None or (time.time() - start_time) < duration:
-                pressure_data = self.get_pressure_data(timeout)
-                if not pressure_data:
-                    print("[Dex3] 未能更新压力数据")
-                    break
-                
-                for i in range(9):
-                    sensor_key = f'sensor_{i}'
-                    if sensor_key in pressure_data and len(images) > i:
-                        pressures = np.array(pressure_data[sensor_key]['pressure']).reshape(3, 4)
-                        images[i].set_array(pressures)
-                
-                plt.draw()
-                plt.pause(interval)  # 控制刷新间隔
-                
-                # 可选：检查退出条件（如按键）
-                if plt.waitforbuttonpress(timeout=0.1):  # 检测键盘输入
-                    break
-            
-            plt.ioff()  # 关闭交互模式
-            plt.show(block=False)  # 非阻塞显示
-        
-        return True
-    
-
-
-    # 保留原有的电机控制方法，但使用新的命令创建逻辑
-    # def stop_motors(self) -> bool:
-    #     """停止所有电机"""
-    #     try:
-    #         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, MotorCmd_
-            
-    #         # 创建7个电机命令
-    #         motor_cmds = []
-    #         for i in range(self.MOTOR_MAX):
-    #             motor_cmd = MotorCmd_(
-    #                 mode=0,  # Disable
-    #                 q=0.0,
-    #                 dq=0.0,
-    #                 tau=0.0,
-    #                 kp=0.0,
-    #                 kd=0.0,
-    #                 reserve=0  # 单个uint32
-    #             )
-    #             motor_cmds.append(motor_cmd)
-            
-    #         hand_cmd = HandCmd_(
-    #             motor_cmd=motor_cmds,
-    #             reserve=[0, 0, 0, 0]  # 4个元素的数组
-    #         )
-            
-    #         success = self._publish_command(hand_cmd)
-    #         if success:
-    #             print(f"[Dex3] {self.hand}手电机已停止")
-    #         return success
-            
-    #     except Exception as e:
-    #         print(f"[Dex3] 停止电机失败: {e}")
-    #         import traceback
-    #         traceback.print_exc()
-    #         return False
-
-
 class Dex3Gestures:
     """预定义的手势库 - 使用弧度值，不使用归一化"""
     
     @staticmethod
     def get_gesture(gesture_name: str, hand_type: str = "right") -> Optional[List[float]]:
         """
-        获取预定义手势的关节角度 - 直接使用弧度值
+        获取预定义手势的关节角度 - 直接使用弧度值，仅支持 nature 和 open 姿势
         
         Args:
-            gesture_name: 手势名称
+            gesture_name: 手势名称 ("nature" 或 "open")
             hand_type: 手的类型 ("left" 或 "right")
         
         Returns:
             7个关节角度列表（弧度）或None
         """
-        # 基础手势定义 - 直接使用弧度值，基于URDF限位
-        base_gestures = {
-            "open": [0.0, -0.3, 0.0, -0.1, -0.1, -0.1, -0.1],      # 张开
-            "closed": [0.0, 0.8, 1.2, 1.2, 1.2, 1.2, 1.2],        # 握拳
-            "pinch": [0.5, 0.6, 0.5, -0.1, -0.1, 0.8, 0.6],       # 捏取
-            "point": [0.0, 0.8, 1.0, 1.0, 1.0, -0.1, -0.1],       # 指点
-            "peace": [0.0, 0.8, 1.0, -0.1, -0.1, -0.1, -0.1],     # 胜利手势
-            "ok": [0.5, 0.6, 0.5, 1.0, 1.0, 0.8, 0.6],            # OK手势
-            "rest": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],          # 休息位
+        # 基于 hand_type 定义的姿势列表
+        if hand_type == "right":
+            nature_pos = [-0.029, -1.019, -1.667, 1.551, 1.702, 1.568, 1.710]
+            open_pos = [-0.029, 0.587, 0.052, -0.053, -0.034, -0.022, -0.016]
+        else:  # hand_type == "left"
+            nature_pos = [-0.028, 1.010, 1.511, -1.582, -1.779, -1.647, -1.827]
+            open_pos = [0.005, -0.616, -0.085, -0.019, -0.035, -0.018, -0.025]
+
+        # 仅支持的姿势
+        valid_gestures = {
+            "nature": nature_pos,
+            "open": open_pos
         }
-        
-        if gesture_name not in base_gestures:
+
+        if gesture_name not in valid_gestures:
             print(f"[Dex3Gestures] 未知手势: {gesture_name}")
-            print(f"[Dex3Gestures] 可用手势: {list(base_gestures.keys())}")
+            print(f"[Dex3Gestures] 可用手势: {list(valid_gestures.keys())}")
             return None
         
-        angles = base_gestures[gesture_name].copy()
-        
-        # 左手需要镜像某些角度
-        if hand_type == "left":
-            # 拇指旋转镜像，其他指关节调整符号以适应左手坐标系
-            angles[0] = -angles[0]  # 拇指旋转镜像
-            # 其他关节根据左手URDF限位调整
-            for i in [1, 3, 4, 5, 6]:
-                angles[i] = -abs(angles[i])  # 左手弯曲方向为负
-        
-        return angles
-
+        return valid_gestures[gesture_name].copy()
 
 @contextlib.contextmanager
 def dex3_connection(hand="right", interface="eth0"):
@@ -912,7 +874,7 @@ def dex3_connection(hand="right", interface="eth0"):
         yield dex3
     finally:
         if dex3:
-            dex3.stop_motors()  # 安全停止
+            dex3.stop_control()  # 安全停止
             print("Dex3 连接已安全关闭")
 
 
@@ -982,6 +944,7 @@ def main():
             print("  3 - 查看当前状态")
             print("  4 - 打印关节详细状态")
             print("  5 - 可视化传感器数据")
+            print("  6 - 打印传感器原始数据")
             print("  q - 退出")
             
             # 简单的命令循环
@@ -991,12 +954,13 @@ def main():
                     
                     if cmd == 'q':
                         print("退出程序...")
+                        # dex3.stop_control()
                         break
                     elif cmd == '1':
                         print("执行基础序列（arm_client风格）...")
                         dex3.execute_basic_sequence()
                     elif cmd == '2':
-                        print("可用手势: open, closed, pinch, point, peace, ok, rest")
+                        print("可用手势: nature, open")
                         gesture = input("请输入手势名称: ").strip()
                         dex3.set_gesture(gesture)
                     elif cmd == '3':
@@ -1014,6 +978,11 @@ def main():
                         success = dex3.visualize_sensor_data(interval=0.2, duration=10.0)
                         if not success:
                             print("传感器数据可视化失败")
+                    elif cmd == '6':
+                        print("开始打印传感器原始数据...")
+                        success = dex3.get_pressure_data()
+                        if not success:
+                            print("传感器原始数据打印失败")
                     else:
                         print("未知命令")
                         
